@@ -8,9 +8,13 @@
 // --- PINOUT ---
 const uint16_t kIrLedPin = 15; // GPIO para o LED IR transmissor
 
-// --- WIFI CREDENTIALS ---
+// --- WIFI CREDENTIALS & STATIC IP ---
 const char* ssid = "Morpheus Jr.";
 const char* password = "soeusei123";
+IPAddress local_IP(10, 0, 0, 50);
+IPAddress gateway(10, 0, 0, 1);
+IPAddress subnet(255, 255, 255, 0);
+IPAddress primaryDNS(10, 0, 0, 1);
 
 // --- WEB SERVER ---
 WebServer server(80);
@@ -270,13 +274,19 @@ void setup() {
 
   Serial.println("\nIniciando...");
   Serial.printf("Conectando a %s ", ssid);
+  
+  // Configura o IP fixo antes de iniciar a conexão WiFi
+  if (!WiFi.config(local_IP, gateway, subnet, primaryDNS)) {
+    Serial.println("Falha na configuração do IP estático!");
+  }
+
   WiFi.begin(ssid, password);
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
     Serial.print(".");
   }
   Serial.println("\n✅ WiFi conectado!");
-  Serial.print("🌐 IP: http://");
+  Serial.print("🌐 IP Fixo: http://");
   Serial.println(WiFi.localIP());
 
   server.on("/", HTTP_GET, handleRoot);
