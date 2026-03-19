@@ -1,23 +1,25 @@
-#include <Arduino.h>
-#include <WiFi.h>
-#include <WebServer.h>
+﻿#include <Arduino.h>
 #include <IRremoteESP8266.h>
 #include <IRsend.h>
 #include <pgmspace.h>
 
 // --- PINOUT ---
 const uint16_t kIrLedPin = 15; // GPIO para o LED IR transmissor
+const uint16_t kIrFreqKHz = 38;
+const uint8_t kIrRepeatCount = 2;
+const uint16_t kIrRepeatGapMs = 35;
 
-// --- WIFI CREDENTIALS & STATIC IP ---
-const char* ssid = "Morpheus Jr.";
-const char* password = "soeusei123";
-IPAddress local_IP(10, 0, 0, 50);
-IPAddress gateway(10, 0, 0, 1);
-IPAddress subnet(255, 255, 255, 0);
-IPAddress primaryDNS(10, 0, 0, 1);
+// --- BOTÕES FÍSICOS ---
+#define BTN_UP    25  // Aumentar temperatura
+#define BTN_DOWN  26  // Diminuir temperatura
+#define BTN_POWER 27  // Ligar / Desligar
 
-// --- WEB SERVER ---
-WebServer server(80);
+// --- ESTADO DO AR ---
+int currentTemp = 23;
+bool acOn = false;
+unsigned long lastDebounce[3] = {0, 0, 0};
+const unsigned long DEBOUNCE_MS = 300;
+
 IRsend irsend(kIrLedPin);
 
 // --- IR RAW DATA (FROM CODIGOS_CAPTURADOS.md) ---
@@ -48,223 +50,134 @@ const char* htmlPage = R"rawliteral(
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Controle AC - Morpheus</title>
   <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       background: #f0f2f5;
-      margin: 0;
-      padding: 20px;
       display: flex;
       justify-content: center;
       align-items: center;
       min-height: 100vh;
-      box-sizing: border-box;
+      padding: 20px;
     }
     .container {
       width: 100%;
-      max-width: 400px;
+      max-width: 360px;
       background: white;
-      border-radius: 20px;
-      padding: 25px;
+      border-radius: 24px;
+      padding: 30px 25px;
       box-shadow: 0 10px 30px rgba(0,0,0,0.1);
     }
-    h1 {
-      text-align:center;
-      color: #333;
-      font-weight: 600;
-      margin-bottom: 20px;
-    }
+    h1 { text-align: center; color: #333; font-size: 20px; margin-bottom: 24px; }
     .temp-display {
       text-align: center;
-      font-size: 64px;
+      font-size: 80px;
       font-weight: 700;
       color: #007aff;
-      margin: 10px 0;
       line-height: 1;
+      margin-bottom: 8px;
     }
-    .slider-container {
-        padding: 15px 0;
-    }
-    .slider {
-      width: 100%;
-      -webkit-appearance: none;
-      height: 10px;
-      border-radius: 5px;
-      background: linear-gradient(90deg, #3b82f6 0%, #ef4444 100%);
-      outline: none;
-      opacity: 0.9;
-      transition: opacity .2s;
-    }
-    .slider:hover {
-      opacity: 1;
-    }
-    .slider::-webkit-slider-thumb {
-      -webkit-appearance: none;
-      appearance: none;
-      width: 28px;
-      height: 28px;
-      border-radius: 50%;
-      background: white;
-      cursor: pointer;
-      border: 1px solid #ddd;
-      box-shadow: 0 2px 5px rgba(0,0,0,0.2);
-    }
-    .slider::-moz-range-thumb {
-      width: 28px;
-      height: 28px;
-      border-radius: 50%;
-      background: white;
-      cursor: pointer;
-      border: 1px solid #ddd;
-      box-shadow: 0 2px 5px rgba(0,0,0,0.2);
-    }
-    .btn-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 15px;
-      margin: 20px 0;
-    }
-    .btn {
-      padding: 15px;
-      border: none;
-      border-radius: 12px;
-      font-size: 16px;
-      font-weight: 600;
-      cursor: pointer;
-      transition: all 0.2s;
-      background: #e5e5ea;
-      color: #000;
-    }
-    .btn:active {
-      transform: scale(0.96);
-    }
-    .btn-power-on { background: #34c759; color: white; }
-    .btn-power-off { background: #ff3b30; color: white; }
-    .quick-buttons {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(50px, 1fr));
-      gap: 10px;
-      margin-top: 20px;
-    }
-    .quick-btn {
-        padding: 10px;
-        font-size: 14px;
-        background: #eef5ff;
-        color: #007aff;
-    }
-    .status {
-      background: #f0f2f5;
-      padding: 12px;
-      border-radius: 10px;
-      margin-top: 20px;
+    .state-label {
       text-align: center;
       font-size: 14px;
-      color: #666;
-      min-height: 20px;
+      font-weight: 600;
+      letter-spacing: 1px;
+      margin-bottom: 32px;
+      color: #aaa;
     }
-    .btn[disabled] {
-        background-color: #e9ecef;
-        color: #adb5bd;
-        cursor: not-allowed;
-        opacity: 0.7;
+    .state-label.on { color: #34c759; }
+    .btn-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+    .btn {
+      padding: 18px 0;
+      border: none;
+      border-radius: 16px;
+      font-size: 28px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: transform 0.1s, box-shadow 0.1s;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.08);
+    }
+    .btn:active { transform: scale(0.93); box-shadow: none; }
+    .btn-down  { background: #e8f0ff; color: #007aff; }
+    .btn-power { background: #ff3b30; color: white; font-size: 22px; }
+    .btn-power.on { background: #34c759; }
+    .btn-up    { background: #e8f0ff; color: #007aff; }
+    .status {
+      background: #f5f5f7;
+      border-radius: 12px;
+      padding: 12px;
+      text-align: center;
+      font-size: 13px;
+      color: #666;
+      min-height: 40px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
     }
   </style>
 </head>
 <body>
   <div class="container">
     <h1>❄️ Controle Ar</h1>
-    
-    <div class="temp-display" id="tempDisplay">25°C</div>
-    
-    <div class="slider-container">
-      <input type="range" min="16" max="30" value="25" class="slider" id="tempSlider">
+    <div class="temp-display" id="tempDisplay">23°C</div>
+    <div class="state-label" id="stateLabel">DESLIGADO</div>
+    <div class="btn-row">
+      <button class="btn btn-down"  onclick="changeTemp(-1)">−</button>
+      <button class="btn btn-power" id="btnPower" onclick="togglePower()">⏻</button>
+      <button class="btn btn-up"    onclick="changeTemp(+1)">+</button>
     </div>
-    
-    <div class="btn-grid">
-      <button class="btn btn-power-on" onclick="power('on')">LIGAR</button>
-      <button class="btn btn-power-off" onclick="power('off')">DESLIGAR</button>
-    </div>
-
-    <div class="btn-grid">
-        <button class="btn" disabled>Fan</button>
-        <button class="btn" disabled>Swing</button>
-        <button class="btn" disabled>Display</button>
-        <button class="btn" disabled>Mudo</button>
-    </div>
-    
-    <div class="quick-buttons" id="quickButtons">
-      <!-- JS will generate buttons 16-30 -->
-    </div>
-    
     <div class="status" id="status">Pronto.</div>
   </div>
-  
   <script>
-    const slider = document.getElementById('tempSlider');
-    const display = document.getElementById('tempDisplay');
-    const statusEl = document.getElementById('status');
-    let debounceTimer;
+    let temp = 23;
+    let acOn = false;
+    const displayEl  = document.getElementById('tempDisplay');
+    const statusEl   = document.getElementById('status');
+    const stateLabel = document.getElementById('stateLabel');
+    const btnPower   = document.getElementById('btnPower');
 
-    function updateStatus(message, isError = false) {
-        statusEl.textContent = message;
-        statusEl.style.color = isError ? '#ff3b30' : '#666';
-    }
-
-    function sendRequest(endpoint, value) {
-        updateStatus('Enviando...');
-        fetch(`/${endpoint}?value=${value}`, {method: 'POST'})
-        .then(response => {
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
-            return response.text();
-        })
-        .then(msg => {
-            updateStatus(msg);
-        })
-        .catch(e => {
-            console.error('Fetch error:', e);
-            updateStatus('Erro de comunicação.', true);
-        });
+    function updateUI() {
+      displayEl.textContent = temp + '°C';
+      stateLabel.textContent = acOn ? 'LIGADO' : 'DESLIGADO';
+      stateLabel.className = 'state-label' + (acOn ? ' on' : '');
+      btnPower.className = 'btn btn-power' + (acOn ? ' on' : '');
     }
 
-    function sendTemp(temp) {
-        sendRequest('temp', temp);
-    }
-    
-    function power(state) {
-        sendRequest('power', state);
+    function post(endpoint, value) {
+      statusEl.textContent = 'Enviando...';
+      fetch('/' + endpoint + '?value=' + value, {method: 'POST'})
+        .then(r => r.ok ? r.text() : Promise.reject(r.status))
+        .then(msg => statusEl.textContent = msg)
+        .catch(e => statusEl.textContent = 'Erro: ' + e);
     }
 
-    slider.oninput = function() {
-      display.textContent = this.value + '°C';
+    function changeTemp(delta) {
+      const next = temp + delta;
+      if (next < 16 || next > 30) return;
+      temp = next;
+      updateUI();
+      if (acOn) post('temp', temp);
     }
-    
-    slider.onchange = function() {
-      sendTemp(this.value);
+
+    function togglePower() {
+      acOn = !acOn;
+      updateUI();
+      if (acOn) post('power', 'on_temp_' + temp);
+      else      post('power', 'off');
     }
-    
-    const quickBtnsContainer = document.getElementById('quickButtons');
-    for(let i = 16; i <= 30; i++) {
-      const btn = document.createElement('button');
-      btn.className = 'btn quick-btn';
-      btn.textContent = i;
-      btn.onclick = () => {
-        slider.value = i;
-        display.textContent = i + '°C';
-        sendTemp(i);
-      };
-      quickBtnsContainer.appendChild(btn);
-    }
+
+    updateUI();
   </script>
 </body>
 </html>
 )rawliteral";
 
 // --- FUNCTION PROTOTYPES ---
-void handleRoot();
-void handleTemp();
-void handlePower();
-void handleNotFound();
 void sendRawCode(const uint16_t* code, size_t len, const char* name);
 void enviarTemperatura(int temp);
 
@@ -272,76 +185,61 @@ void setup() {
   Serial.begin(115200);
   irsend.begin();
 
-  Serial.println("\nIniciando...");
-  Serial.printf("Conectando a %s ", ssid);
-  
-  // Configura o IP fixo antes de iniciar a conexão WiFi
-  if (!WiFi.config(local_IP, gateway, subnet, primaryDNS)) {
-    Serial.println("Falha na configuração do IP estático!");
-  }
+  pinMode(BTN_UP,    INPUT_PULLUP);
+  pinMode(BTN_DOWN,  INPUT_PULLUP);
+  pinMode(BTN_POWER, INPUT_PULLUP);
 
-  WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-  Serial.println("\n✅ WiFi conectado!");
-  Serial.print("🌐 IP Fixo: http://");
-  Serial.println(WiFi.localIP());
-
-  server.on("/", HTTP_GET, handleRoot);
-  server.on("/temp", HTTP_POST, handleTemp);
-  server.on("/power", HTTP_POST, handlePower);
-  server.onNotFound(handleNotFound);
-
-  server.begin();
-  Serial.println("🚀 Web server iniciado!");
+  Serial.println("\nIniciando modo offline (somente botões físicos + IR)...");
+  Serial.printf("IR no GPIO %d | Botões: UP=%d DOWN=%d POWER=%d\n", kIrLedPin, BTN_UP, BTN_DOWN, BTN_POWER);
 }
 
 void loop() {
-  server.handleClient();
-}
+  unsigned long now = millis();
 
-// --- HANDLER FUNCTIONS ---
-
-void handleRoot() {
-  server.send(200, "text/html", htmlPage);
-}
-
-void handleTemp() {
-  if (server.hasArg("value")) {
-    int temp = server.arg("value").toInt();
-    if (temp >= 16 && temp <= 30) {
-      enviarTemperatura(temp);
-      String message = "✅ Temperatura " + String(temp) + "°C enviada!";
-      server.send(200, "text/plain", message);
-    } else {
-      server.send(400, "text/plain", "❌ Temperatura inválida! Use 16-30°C");
-    }
-  } else {
-    server.send(400, "text/plain", "❌ Argumento 'value' não encontrado.");
+  // Debug: mostra estado dos pinos a cada 2 segundos
+  static unsigned long lastPrint = 0;
+  if (now - lastPrint > 2000) {
+    lastPrint = now;
+    Serial.printf("[DEBUG] BTN_UP=%d BTN_DOWN=%d BTN_POWER=%d | acOn=%d temp=%d\n",
+      digitalRead(BTN_UP), digitalRead(BTN_DOWN), digitalRead(BTN_POWER), acOn, currentTemp);
   }
-}
 
-void handlePower() {
-    if (server.hasArg("value")) {
-        String state = server.arg("value");
-        if (state == "off") {
-            sendRawCode(POWER_OFF, 255, "DESLIGAR");
-            server.send(200, "text/plain", "✅ Comando DESLIGAR enviado!");
-        } else if (state == "on") {
-            enviarTemperatura(23); // Usa o código de 23 graus para ligar
-            server.send(200, "text/plain", "✅ Comando LIGAR (23°C) enviado!");
-        } else {
-            server.send(400, "text/plain", "❌ Estado de power inválido.");
-        }
+  // BTN_POWER
+  if (digitalRead(BTN_POWER) == LOW && (now - lastDebounce[2]) > DEBOUNCE_MS) {
+    lastDebounce[2] = now;
+    Serial.println("[BTN] POWER pressionado");
+    if (acOn) {
+      sendRawCode(POWER_OFF, 255, "DESLIGAR");
+      acOn = false;
+      Serial.println("Ar DESLIGADO");
     } else {
-        server.send(400, "text/plain", "❌ Argumento 'value' não encontrado.");
+      enviarTemperatura(currentTemp);
+      acOn = true;
+      Serial.printf("Ar LIGADO em %d°C\n", currentTemp);
     }
-}
+  }
 
-void handleNotFound() {
-  server.send(404, "text/plain", "404: Not Found");
+  // BTN_UP
+  if (digitalRead(BTN_UP) == LOW && (now - lastDebounce[0]) > DEBOUNCE_MS) {
+    lastDebounce[0] = now;
+    Serial.println("[BTN] UP pressionado");
+    if (currentTemp < 30) {
+      currentTemp++;
+      Serial.printf("Temp -> %d°C\n", currentTemp);
+      if (acOn) enviarTemperatura(currentTemp);
+    }
+  }
+
+  // BTN_DOWN
+  if (digitalRead(BTN_DOWN) == LOW && (now - lastDebounce[1]) > DEBOUNCE_MS) {
+    lastDebounce[1] = now;
+    Serial.println("[BTN] DOWN pressionado");
+    if (currentTemp > 16) {
+      currentTemp--;
+      Serial.printf("Temp -> %d°C\n", currentTemp);
+      if (acOn) enviarTemperatura(currentTemp);
+    }
+  }
 }
 
 // --- IR SEND FUNCTIONS ---
@@ -354,8 +252,14 @@ void sendRawCode(const uint16_t* code_P, size_t len, const char* name) {
     // Copy data from PROGMEM to a RAM buffer
     uint16_t ram_buffer[len];
     memcpy_P(ram_buffer, code_P, sizeof(uint16_t) * len);
-    
-    irsend.sendRaw(ram_buffer, len, 38);  // Send with 38kHz frequency
+
+    for (uint8_t i = 0; i < kIrRepeatCount; i++) {
+      irsend.sendRaw(ram_buffer, len, kIrFreqKHz);
+      if (i + 1 < kIrRepeatCount) {
+        delay(kIrRepeatGapMs);
+      }
+    }
+
     Serial.printf("✅ Enviado comando '%s'\n", name);
 }
 
