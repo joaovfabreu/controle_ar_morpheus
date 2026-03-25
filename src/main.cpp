@@ -4,15 +4,15 @@
 #include <pgmspace.h>
 
 // --- PINOUT ---
-const uint16_t kIrLedPin = 15; // GPIO para o LED IR transmissor
+const uint16_t kIrLedPin = 7; // GPIO para o LED IR transmissor (ESP32-C3)
 const uint16_t kIrFreqKHz = 38;
 const uint8_t kIrRepeatCount = 2;
 const uint16_t kIrRepeatGapMs = 35;
 
 // --- BOTÕES FÍSICOS ---
-#define BTN_UP    25  // Aumentar temperatura
-#define BTN_DOWN  26  // Diminuir temperatura
-#define BTN_POWER 27  // Ligar / Desligar
+#define BTN_UP    3  // Aumentar temperatura
+#define BTN_DOWN  4  // Diminuir temperatura
+#define BTN_POWER 5  // Ligar / Desligar
 
 // --- ESTADO DO AR ---
 int currentTemp = 23;
@@ -180,6 +180,9 @@ const char* htmlPage = R"rawliteral(
 // --- FUNCTION PROTOTYPES ---
 void sendRawCode(const uint16_t* code, size_t len, const char* name);
 void enviarTemperatura(int temp);
+void toggleAcPower();
+void increaseTemperature();
+void decreaseTemperature();
 
 void setup() {
   Serial.begin(115200);
@@ -208,37 +211,58 @@ void loop() {
   if (digitalRead(BTN_POWER) == LOW && (now - lastDebounce[2]) > DEBOUNCE_MS) {
     lastDebounce[2] = now;
     Serial.println("[BTN] POWER pressionado");
-    if (acOn) {
-      sendRawCode(POWER_OFF, 255, "DESLIGAR");
-      acOn = false;
-      Serial.println("Ar DESLIGADO");
-    } else {
-      enviarTemperatura(currentTemp);
-      acOn = true;
-      Serial.printf("Ar LIGADO em %d°C\n", currentTemp);
-    }
+    toggleAcPower();
   }
 
   // BTN_UP
   if (digitalRead(BTN_UP) == LOW && (now - lastDebounce[0]) > DEBOUNCE_MS) {
     lastDebounce[0] = now;
     Serial.println("[BTN] UP pressionado");
-    if (currentTemp < 30) {
-      currentTemp++;
-      Serial.printf("Temp -> %d°C\n", currentTemp);
-      if (acOn) enviarTemperatura(currentTemp);
-    }
+    increaseTemperature();
   }
 
   // BTN_DOWN
   if (digitalRead(BTN_DOWN) == LOW && (now - lastDebounce[1]) > DEBOUNCE_MS) {
     lastDebounce[1] = now;
     Serial.println("[BTN] DOWN pressionado");
-    if (currentTemp > 16) {
-      currentTemp--;
-      Serial.printf("Temp -> %d°C\n", currentTemp);
-      if (acOn) enviarTemperatura(currentTemp);
-    }
+    decreaseTemperature();
+  }
+}
+
+void toggleAcPower() {
+  if (acOn) {
+    sendRawCode(POWER_OFF, 255, "DESLIGAR");
+    acOn = false;
+    Serial.println("Ar DESLIGADO");
+    return;
+  }
+
+  enviarTemperatura(currentTemp);
+  acOn = true;
+  Serial.printf("Ar LIGADO em %d°C\n", currentTemp);
+}
+
+void increaseTemperature() {
+  if (currentTemp >= 30) {
+    return;
+  }
+
+  currentTemp++;
+  Serial.printf("Temp -> %d°C\n", currentTemp);
+  if (acOn) {
+    enviarTemperatura(currentTemp);
+  }
+}
+
+void decreaseTemperature() {
+  if (currentTemp <= 16) {
+    return;
+  }
+
+  currentTemp--;
+  Serial.printf("Temp -> %d°C\n", currentTemp);
+  if (acOn) {
+    enviarTemperatura(currentTemp);
   }
 }
 
