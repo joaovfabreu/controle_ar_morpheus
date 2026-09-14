@@ -56,8 +56,8 @@ controle_ar_morpheus/
 
 ### 3. Configuração WiFi Solicitada
 
-- **SSID**: `Morpheus Jr.`
-- **Senha**: `soeusei123`
+- **SSID**: `[SEU_WIFI_AQUI]`
+- **Senha**: `[SUA_SENHA_AQUI]`
 
 ---
 
@@ -77,8 +77,8 @@ controle_ar_morpheus/
 #include <WiFi.h>
 #include <WebServer.h>
 
-const char* ssid = "Morpheus Jr.";
-const char* password = "soeusei123";
+const char* ssid = "[SEU_WIFI_AQUI]";
+const char* password = "[SUA_SENHA_AQUI]";
 WebServer server(80);
 ```
 
@@ -349,7 +349,7 @@ monitor_speed = 115200
 ## 🎯 RESULTADO ESPERADO
 
 Após upload do código:
-1. ESP32 conecta no WiFi "Morpheus Jr."
+1. ESP32 conecta no WiFi "[SEU_WIFI_AQUI]"
 2. Imprime IP no Serial Monitor (ex: `192.168.1.100`)
 3. Usuário acessa `http://192.168.1.100` no navegador
 4. Interface web carrega com controles do AC
@@ -474,5 +474,5 @@ Este projeto está **95% pronto**. Só falta juntar as peças:
 
 📅 **Data**: 7 de Novembro de 2025  
 👤 **Usuário**: Victor  
-🏠 **Rede WiFi**: Morpheus Jr. (soeusei123)  
+🏠 **Rede WiFi**: [NOME_DA_REDE] ([SENHA])  
 🎯 **Meta**: Controlar AC via interface web no ESP32

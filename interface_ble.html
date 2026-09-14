@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <title>Controle Ar Morpheus - BLE</title>
+  <style>
+    :root {
+      --bg: #f0f2f5;
+      --card: #1a1a1a;
+      --btn: #333;
+      --btn-active: #4d4d4d;
+      --text: #fff;
+      --danger: #ff4444;
+      --ok: #00cc44;
+      --wait: #ffaa00;
+    }
+
+    * {
+      box-sizing: border-box;
+      -webkit-tap-highlight-color: transparent;
+      user-select: none;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--bg);
+      font-family: "Segoe UI", Roboto, Arial, sans-serif;
+      padding: 20px;
+    }
+
+    .card {
+      width: 100%;
+      max-width: 320px;
+      background: var(--card);
+      border-radius: 28px;
+      padding: 20px;
+      box-shadow: 0 15px 35px rgba(0, 0, 0, 0.35);
+      color: var(--text);
+    }
+
+    #ble-status {
+      text-align: center;
+      padding: 12px;
+      border-radius: 10px;
+      font-size: 13px;
+      font-weight: 600;
+      margin-bottom: 16px;
+      cursor: pointer;
+      background: var(--danger);
+    }
+
+    #ble-status.connected { background: var(--ok); cursor: default; }
+    #ble-status.connecting { background: var(--wait); cursor: default; }
+
+    .temp {
+      text-align: center;
+      font-size: 52px;
+      font-weight: 700;
+      margin: 8px 0 2px;
+    }
+
+    .state {
+      text-align: center;
+      color: #bbb;
+      font-size: 12px;
+      letter-spacing: 1px;
+      margin-bottom: 18px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+    }
+
+    button {
+      border: none;
+      border-radius: 12px;
+      height: 62px;
+      font-size: 24px;
+      font-weight: 700;
+      color: var(--text);
+      background: var(--btn);
+      cursor: pointer;
+    }
+
+    button:active { transform: scale(0.95); background: var(--btn-active); }
+
+    #power { background: var(--danger); }
+    #power.on { background: var(--ok); }
+
+    .hint {
+      text-align: center;
+      margin-top: 14px;
+      font-size: 11px;
+      color: #a8a8a8;
+      line-height: 1.4;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div id="ble-status" onclick="connectBLE()">🔵 Clique para Conectar BLE</div>
+    <div class="temp" id="temp">23°C</div>
+    <div class="state" id="state">DESLIGADO</div>
+
+    <div class="grid">
+      <button onclick="sendDown()">−</button>
+      <button id="power" onclick="sendPower()">⏻</button>
+      <button onclick="sendUp()">+</button>
+    </div>
+
+    <div class="hint">Dispositivo: <b>ESP32-Morpheus-AC</b><br>Comandos via BLE (sem internet).</div>
+  </div>
+
+  <script>
+    let bleDevice = null;
+    let bleCharacteristic = null;
+    let pendingAckResolver = null;
+    const SERVICE_UUID = '4fafc201-1fb5-459e-8fcc-c5c9c331914b';
+    const CHARACTERISTIC_UUID = 'beb5483e-36e1-4688-b7f5-ea07361b26a8';
+
+    let temp = 23;
+    let on = false;
+
+    function updateUi() {
+      document.getElementById('temp').textContent = `${temp}°C`;
+      document.getElementById('state').textContent = on ? 'LIGADO' : 'DESLIGADO';
+      document.getElementById('power').className = on ? 'on' : '';
+    }
+
+    function handleNotification(event) {
+      const value = new TextDecoder().decode(event.target.value);
+      if (pendingAckResolver) {
+        pendingAckResolver(value);
+        pendingAckResolver = null;
+      }
+    }
+
+    async function attachCharacteristic(server) {
+      const service = await server.getPrimaryService(SERVICE_UUID);
+      bleCharacteristic = await service.getCharacteristic(CHARACTERISTIC_UUID);
+      await bleCharacteristic.startNotifications();
+      bleCharacteristic.removeEventListener('characteristicvaluechanged', handleNotification);
+      bleCharacteristic.addEventListener('characteristicvaluechanged', handleNotification);
+    }
+
+    async function reconnectBLE() {
+      if (!bleDevice) return false;
+      const server = await bleDevice.gatt.connect();
+      await attachCharacteristic(server);
+      return true;
+    }
+
+    async function waitAck(timeoutMs = 1500) {
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          pendingAckResolver = null;
+          reject(new Error('Timeout aguardando ACK do ESP32'));
+        }, timeoutMs);
+
+        pendingAckResolver = (msg) => {
+          clearTimeout(timer);
+          resolve(msg);
+        };
+      });
+    }
+
+    async function connectBLE() {
+      const statusEl = document.getElementById('ble-status');
+
+      if (!navigator.bluetooth) {
+        alert('Web Bluetooth não disponível neste navegador. Use Safari 16+ (iOS) ou Chrome/Edge (Android/desktop).');
+        return;
+      }
+
+      try {
+        statusEl.className = 'connecting';
+        statusEl.textContent = '🔄 Conectando...';
+
+        bleDevice = await navigator.bluetooth.requestDevice({
+          acceptAllDevices: true,
+          optionalServices: [SERVICE_UUID]
+        });
+
+        bleDevice.addEventListener('gattserverdisconnected', onDisconnected);
+
+        const server = await bleDevice.gatt.connect();
+        await attachCharacteristic(server);
+
+        statusEl.className = 'connected';
+        statusEl.textContent = '✅ Conectado ao ESP32';
+        statusEl.onclick = null;
+      } catch (error) {
+        statusEl.className = '';
+        statusEl.textContent = '🔵 Clique para Conectar BLE';
+        if (error && (error.name === 'NotFoundError' || String(error.message).includes('cancelled'))) {
+          alert('Seleção cancelada. Reabra e escolha o dispositivo ESP32-Morpheus-AC.');
+        } else {
+          alert('Erro ao conectar: ' + error.message);
+        }
+      }
+    }
+
+    function onDisconnected() {
+      const statusEl = document.getElementById('ble-status');
+      bleCharacteristic = null;
+      pendingAckResolver = null;
+      statusEl.className = '';
+      statusEl.textContent = '🔵 Clique para Conectar BLE';
+      statusEl.onclick = connectBLE;
+    }
+
+    async function sendCommand(cmd) {
+      if (!bleCharacteristic) {
+        const ok = await reconnectBLE().catch(() => false);
+        if (!ok) {
+          throw new Error('Conecte ao ESP32 primeiro.');
+        }
+      }
+
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          const payload = new TextEncoder().encode(cmd);
+          const ackPromise = waitAck();
+          await bleCharacteristic.writeValue(payload);
+          const ack = await ackPromise;
+          if (ack !== 'OK') {
+            throw new Error('ESP respondeu ' + ack);
+          }
+          return;
+        } catch (err) {
+          if (attempt === 1) {
+            throw err;
+          }
+
+          bleCharacteristic = null;
+          await reconnectBLE();
+        }
+      }
+    }
+
+    async function sendPower() {
+      try {
+        await sendCommand('POWER');
+        on = !on;
+        updateUi();
+      } catch (e) {
+        alert('Falha ao enviar POWER: ' + e.message);
+      }
+    }
+
+    async function sendUp() {
+      if (temp >= 30) return;
+      try {
+        await sendCommand('UP');
+        temp++;
+        updateUi();
+      } catch (e) {
+        alert('Falha ao enviar UP: ' + e.message);
+      }
+    }
+
+    async function sendDown() {
+      if (temp <= 16) return;
+      try {
+        await sendCommand('DOWN');
+        temp--;
+        updateUi();
+      } catch (e) {
+        alert('Falha ao enviar DOWN: ' + e.message);
+      }
+    }
+
+    updateUi();
+  </script>
+</body>
+</html>
